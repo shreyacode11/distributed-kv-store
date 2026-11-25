@@ -1,4 +1,4 @@
-# Distributed KV Store
+﻿# Distributed KV Store
 
 A fault-tolerant, leaderless distributed key-value store built with **Python and FastAPI**, demonstrating core distributed-systems concepts including consistent hashing, quorum replication, failure detection, durable storage, and replica recovery.
 
@@ -281,6 +281,30 @@ These tests demonstrate quorum enforcement, continued operation during a single 
 
 ---
 
+## Project Screenshots
+
+### Five-node Docker cluster
+
+![Five nodes running](screenshots/cluster-running.png)
+
+### Cluster health
+
+![All five nodes healthy](screenshots/cluster-status.png)
+
+### Write and read replication
+
+![PUT and GET across nodes](screenshots/put-get-replication.png)
+
+### Fault tolerance
+
+![Successful operations with one node down](screenshots/one-node-failure.png)
+
+### Node recovery
+
+![All five nodes recovered](screenshots/cluster-recovered.png)
+
+---
+
 ## Automated Testing
 
 Run the complete test suite:
@@ -380,25 +404,26 @@ python loadtest/loadtest.py \
 
 ```text
 distributed-kv-store/
-│
-├── .github/
-│   └── workflows/       GitHub Actions CI
-│
-├── kvnode/
-│   ├── ring.py          Consistent hashing and virtual nodes
-│   ├── storage.py       WAL, recovery, compaction, sorted index
-│   └── main.py          FastAPI, quorum coordination, read repair
-│
-├── tests/               Unit and end-to-end tests
-├── loadtest/            Async throughput and latency benchmark
-├── scripts/             Local cluster and demo scripts
-│
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── pytest.ini
-├── Makefile
-└── README.md
+|
+|-- .github/
+|   |-- workflows/          GitHub Actions CI
+|
+|-- kvnode/
+|   |-- ring.py             Consistent hashing and virtual nodes
+|   |-- storage.py          WAL, recovery, compaction, sorted index
+|   |-- main.py             FastAPI, quorum coordination, read repair
+|
+|-- tests/                  Unit and end-to-end tests
+|-- loadtest/               Async throughput and latency benchmark
+|-- scripts/                Local cluster and demo scripts
+|-- screenshots/            Cluster and fault-tolerance screenshots
+|
+|-- Dockerfile
+|-- docker-compose.yml
+|-- requirements.txt
+|-- pytest.ini
+|-- Makefile
+|-- README.md
 ```
 
 ---
