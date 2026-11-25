@@ -114,3 +114,66 @@ def test_get_returns_copy(tmp_path):
         record["value"] = "modified"
 
         assert s.get("a")["value"] == "original"
+
+def test_runtime_compaction_at_threshold(tmp_path):
+    path = str(tmp_path / "runtime.log")
+
+    store = Store(path, fsync=False, compact_threshold=3)
+
+    store.put("a", "one", 1, "node1")
+    store.put("a", "two", 2, "node1")
+    store.put("b", "three", 3, "node1")
+
+    store.close()
+
+    with open(path, encoding="utf-8") as f:
+        records = [line for line in f if line.strip()]
+
+    assert len(records) == 2
+
+    reopened = Store(path, fsync=False)
+    assert reopened.get("a")["value"] == "two"
+    assert reopened.get("b")["value"] == "three"
+    reopened.close()
+
+
+def test_runtime_compaction_preserves_tombstones(tmp_path):
+    path = str(tmp_path / "tombstones.log")
+
+    store = Store(path, fsync=False, compact_threshold=2)
+
+    store.put("a", "value", 1, "node1")
+    store.put("a", None, 2, "node1", deleted=True)
+
+    store.close()
+
+    reopened = Store(path, fsync=False)
+    record = reopened.get("a")
+
+    assert record is not None
+    assert record["deleted"] is True
+    assert record["ts"] == 2
+
+    assert reopened.put("a", "stale", 1, "node1") is False
+    reopened.close()
+
+
+def test_runtime_compaction_preserves_latest_versions(tmp_path):
+    path = str(tmp_path / "latest.log")
+
+    store = Store(path, fsync=False, compact_threshold=2)
+
+    store.put("a", "old", 1, "node1")
+    store.put("b", "value", 1, "node1")
+    store.put("a", "new", 2, "node1")
+    store.put("c", "value", 1, "node1")
+
+    store.close()
+
+    reopened = Store(path, fsync=False)
+
+    assert reopened.get("a")["value"] == "new"
+    assert reopened.get("b")["value"] == "value"
+    assert reopened.get("c")["value"] == "value"
+
+    reopened.close()
