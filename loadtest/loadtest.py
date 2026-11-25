@@ -47,9 +47,9 @@ async def main():
     urls = a.nodes.split(",")
 
     limits = httpx.Limits(max_connections=a.concurrency * 2)
-    async with httpx.AsyncClient(timeout=5, limits=limits) as client:
+    async with httpx.AsyncClient(timeout=15, limits=limits) as client:
         # preload so reads hit real data
-        sem = asyncio.Semaphore(32)
+        sem = asyncio.Semaphore(8)
 
         async def load(i):
             async with sem:
@@ -73,3 +73,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

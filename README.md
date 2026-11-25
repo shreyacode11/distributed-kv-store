@@ -1,4 +1,4 @@
-# distkv — a small distributed key-value store
+﻿# distkv â€” a small distributed key-value store
 
 A Dynamo-style, leaderless key-value store written in Python (FastAPI). Data is partitioned with **consistent hashing**, replicated to **3 of 5 nodes**, and served through **quorum reads and writes** (N=3, W=2, R=2). It keeps working when a node dies, recovers a restarted node from its **write-ahead log**, repairs stale replicas with **read repair**, and supports a sorted **prefix-scan index**.
 
@@ -81,10 +81,10 @@ python loadtest/loadtest.py --nodes http://localhost:8001,http://localhost:8002,
 ```
 Run it once with all nodes up, then stop a node and re-run against the remaining ones. Record your own numbers (they depend heavily on hardware; running 5 nodes and the load generator on one laptop is CPU-bound):
 
-| Scenario | Throughput (ops/s) | p50 (ms) | p95 (ms) | Errors |
-|---|---|---|---|---|
-| 5 nodes up | _fill in_ | _fill in_ | _fill in_ | _fill in_ |
-| 1 node down | _fill in_ | _fill in_ | _fill in_ | _fill in_ |
+| Scenario | Concurrency | Keyspace | Requests | Throughput (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) | Errors |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 5 nodes up | 8 | 100 | 504 | 33 | 206.9 | 469.7 | 665.6 | 0 |
+| 1 node down | 8 | 100 | 451 | 30 | 201.6 | 679.7 | 1021.2 | 1 |
 
 ## Design decisions and trade-offs
 
@@ -120,3 +120,4 @@ docker-compose.yml   5-node cluster
 
 ## Config (environment variables)
 `NODE_ID`, `PEERS` (`id=url,...`), `N` (3), `W` (2), `R` (2), `DATA_DIR`, `FSYNC` (1), `RPC_TIMEOUT` (0.8s), `HEARTBEAT_INTERVAL` (2s).
+
