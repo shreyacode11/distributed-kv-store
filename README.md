@@ -8,7 +8,7 @@ It supports node failures, WAL-based recovery, read repair, and distributed pref
 
 **Built to demonstrate backend engineering, distributed systems, fault tolerance, and storage fundamentals.**
 
-![CI](https://github.com/shreyacode11/distributed-kv-store/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/shreyacode11/distributed-kv-store/actions/workflows/ci.yml/badge.svg)](https://github.com/shreyacode11/distributed-kv-store/actions/workflows/ci.yml)
 
 **Repository:** [github.com/shreyacode11/distributed-kv-store](https://github.com/shreyacode11/distributed-kv-store)
 
