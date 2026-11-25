@@ -1,123 +1,866 @@
-﻿# distkv â€” a small distributed key-value store
+﻿# \# Distributed KV Store
 
-A Dynamo-style, leaderless key-value store written in Python (FastAPI). Data is partitioned with **consistent hashing**, replicated to **3 of 5 nodes**, and served through **quorum reads and writes** (N=3, W=2, R=2). It keeps working when a node dies, recovers a restarted node from its **write-ahead log**, repairs stale replicas with **read repair**, and supports a sorted **prefix-scan index**.
+# 
 
-Built to demonstrate distributed-systems fundamentals: partitioning, replication, quorum consistency, failure detection, durability and recovery.
+# A fault-tolerant, leaderless distributed key-value store built with \*\*Python and FastAPI\*\*, demonstrating core distributed-systems concepts including consistent hashing, quorum replication, failure detection, durable storage, and replica recovery.
 
-![ci](https://github.com/<your-username>/distkv/actions/workflows/ci.yml/badge.svg)
+# 
 
-## Architecture
+# The system runs across \*\*5 independent nodes\*\*, partitions data using consistent hashing, and maintains \*\*3 replicas per key\*\* with quorum-based reads and writes (\*\*N=3, W=2, R=2\*\*).
 
-```mermaid
-flowchart LR
-  C[Client] -->|any node can coordinate| N1
-  subgraph Cluster[5 nodes, each: HTTP API + WAL + sorted index]
-    N1[node1] --- N2[node2] --- N3[node3] --- N4[node4] --- N5[node5]
-  end
-  N1 -.->|replicate to 3 owners found via the hash ring| N3
-  N1 -.-> N5
-```
+# 
 
-**Write path:** the coordinator hashes the key, finds the 3 owner nodes on the ring, sends the write to all 3 in parallel and returns success after **W=2** acknowledgements. Each replica appends to its WAL (fsync) before acknowledging.
+# It supports node failures, WAL-based recovery, read repair, and distributed prefix scans.
 
-**Read path:** the coordinator asks the 3 owners, returns after **R=2** replies, picks the newest version, and repairs any stale replica in the background (**read repair**).
+# 
 
-Because **R + W > N**, every read quorum overlaps every write quorum, so a read always sees the latest acknowledged write. Any single node can fail with no loss of availability for any key.
+# \*\*Built to demonstrate backend engineering, distributed systems, fault tolerance, and storage fundamentals.\*\*
 
-## Quick start
+# 
 
-### Option A: Docker Compose (recommended)
-```bash
-docker compose up -d --build      # 5 nodes on localhost:8001..8005
-./scripts/demo.sh                 # guided demo: replicate, kill a node, recover
-docker compose down -v            # clean up
-```
+# !\[CI](https://github.com/shreyacode11/distributed-kv-store/actions/workflows/ci.yml/badge.svg)
 
-### Option B: no Docker
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-./scripts/run_local.sh            # 5 nodes on localhost:8001..8005
-curl -X PUT localhost:8001/kv/hello -H 'content-type: application/json' -d '{"value":"world"}'
-curl localhost:8004/kv/hello      # read through a different node
-./scripts/stop_local.sh
-```
+# 
 
-### Try it by hand
-```bash
-curl localhost:8001/cluster/locate/user:42             # which 3 nodes own this key
-curl -X PUT localhost:8001/kv/user:42 -H 'content-type: application/json' -d '{"value":"alice"}'
-docker compose stop node3                               # kill a node
-curl localhost:8002/kv/user:42                          # still served
-curl "localhost:8002/scan?prefix=user:&limit=10"        # prefix query, node down
-docker compose start node3                              # restarts, recovers from its WAL
-curl localhost:8001/cluster/status                      # heartbeat view of the cluster
-```
+# \*\*Repository:\*\* \[github.com/shreyacode11/distributed-kv-store](https://github.com/shreyacode11/distributed-kv-store)
 
-## API
+# 
 
-| Method | Path | Description |
-|---|---|---|
-| `PUT` | `/kv/{key}` body `{"value": "..."}` | Quorum write. `503` if fewer than W replicas respond |
-| `GET` | `/kv/{key}` | Quorum read, `404` if absent or deleted, `503` if fewer than R respond |
-| `DELETE` | `/kv/{key}` | Quorum delete (tombstone) |
-| `GET` | `/scan?prefix=&limit=` | Sorted prefix query across the cluster |
-| `GET` | `/cluster/status` | Config, key count, peer liveness (heartbeats) |
-| `GET` | `/cluster/locate/{key}` | Replica set for a key |
-| `GET` | `/health` | Liveness probe |
+# \---
 
-## Tests
-```bash
-pip install -r requirements.txt
-pytest -m "not e2e"    # unit tests: ring distribution/stability, WAL recovery, LWW, tombstones
-pytest -m e2e          # boots 5 real node processes and kills them mid-test
-```
-The end-to-end tests check: any node can coordinate; a replica can die and writes/reads still succeed; a restarted replica recovers from its WAL and is **read-repaired**; losing 2 of 3 replicas returns `503` instead of stale data; prefix scans stay complete with a node down. CI runs both suites on every push.
+# 
 
-## Load test
-```bash
-python loadtest/loadtest.py --nodes http://localhost:8001,http://localhost:8002,http://localhost:8003 \
-    --duration 15 --concurrency 32 --write-ratio 0.3
-```
-Run it once with all nodes up, then stop a node and re-run against the remaining ones. Record your own numbers (they depend heavily on hardware; running 5 nodes and the load generator on one laptop is CPU-bound):
+# \## System Architecture
 
-| Scenario | Concurrency | Keyspace | Requests | Throughput (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) | Errors |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| 5 nodes up | 8 | 100 | 504 | 33 | 206.9 | 469.7 | 665.6 | 0 |
-| 1 node down | 8 | 100 | 451 | 30 | 201.6 | 679.7 | 1021.2 | 1 |
+# 
 
-## Design decisions and trade-offs
+# ```mermaid
 
-| Decision | Why | Trade-off |
-|---|---|---|
-| Consistent hashing, 128 virtual nodes/node | Even spread; adding/removing a node moves only ~1/N of keys (tested) | Membership is static (set via `PEERS`), no dynamic rebalancing |
-| N=3, W=2, R=2 | R+W>N gives read-your-latest-write; tolerates 1 failed replica per key | A write needs 2 live replicas, and with 2 down it returns 503 (consistency over availability, a CP-leaning choice) |
-| 5 nodes, 3 replicas per key | The ring does real partitioning; with only 3 nodes every node would hold every key | More containers to run |
-| Leaderless, any node coordinates | No single point of failure, no election | Concurrent writes need a conflict rule |
-| Last-write-wins on (timestamp, origin id) | Simple, deterministic, convergent | Relies on roughly synced clocks; concurrent writes to one key can lose one. Vector clocks would fix it |
-| Tombstones for deletes | A stale replica can't resurrect deleted data | Tombstones are never garbage-collected |
-| WAL + fsync + compaction on startup | Durable acks; recovery by replay; torn tail write tolerated | One fsync per write; `FSYNC=0` trades durability for speed |
-| Sorted key index + scatter-gather scan | O(log n + k) per node; complete with < N nodes down | A scan contacts every node; tombstones can shrink a page |
-| Read repair, no hinted handoff or Merkle trees | Heals keys that get read, with simple code | Keys never read stay stale until touched (no background anti-entropy) |
+# flowchart TB
 
-## Known limitations (and what I would build next)
-- Static membership: no node join/leave or data streaming. Next: gossip membership and rebalancing.
-- No anti-entropy: add Merkle-tree sync to heal keys that are never read.
-- Partial writes are not rolled back: a write that fails quorum may still exist on one replica and can surface later (the usual Dynamo behaviour).
-- LWW uses wall clocks. Next: vector clocks or hybrid logical clocks.
-- No auth or TLS between nodes.
+# &#x20;   C\["Client"]
 
-## Project layout
-```
-kvnode/ring.py       consistent-hash ring with virtual nodes
-kvnode/storage.py    WAL, recovery, compaction, sorted index
-kvnode/main.py       coordinator logic: quorum, read repair, heartbeats, API
-tests/               unit + end-to-end (real processes, real kills)
-loadtest/            async load generator (ops/s, p50/p95/p99)
-scripts/             run_local.sh, stop_local.sh, demo.sh
-docker-compose.yml   5-node cluster
-```
+# &#x20;   
 
-## Config (environment variables)
-`NODE_ID`, `PEERS` (`id=url,...`), `N` (3), `W` (2), `R` (2), `DATA_DIR`, `FSYNC` (1), `RPC_TIMEOUT` (0.8s), `HEARTBEAT_INTERVAL` (2s).
+# &#x20;   subgraph CLUSTER\["Distributed Cluster - 5 Nodes"]
+
+# &#x20;       N1\["Node 1"]
+
+# &#x20;       N2\["Node 2"]
+
+# &#x20;       N3\["Node 3"]
+
+# &#x20;       N4\["Node 4"]
+
+# &#x20;       N5\["Node 5"]
+
+# &#x20;   end
+
+# 
+
+# &#x20;   H\["Consistent Hash Ring<br/>128 Virtual Nodes per Node"]
+
+# &#x20;   Q\["Quorum Coordinator<br/>N=3, W=2, R=2"]
+
+# &#x20;   S\["Replica Storage<br/>WAL + In-Memory Index"]
+
+# &#x20;   F\["Heartbeat Failure Detection"]
+
+# &#x20;   RR\["Read Repair"]
+
+# 
+
+# &#x20;   C --> N1
+
+# &#x20;   C --> N2
+
+# &#x20;   C --> N3
+
+# &#x20;   C --> N4
+
+# &#x20;   C --> N5
+
+# 
+
+# &#x20;   N1 --> Q
+
+# &#x20;   N2 --> Q
+
+# &#x20;   N3 --> Q
+
+# &#x20;   N4 --> Q
+
+# &#x20;   N5 --> Q
+
+# 
+
+# &#x20;   Q --> H
+
+# &#x20;   H --> N1
+
+# &#x20;   H --> N2
+
+# &#x20;   H --> N3
+
+# &#x20;   H --> N4
+
+# &#x20;   H --> N5
+
+# 
+
+# &#x20;   N1 --> S
+
+# &#x20;   N2 --> S
+
+# &#x20;   N3 --> S
+
+# &#x20;   N4 --> S
+
+# &#x20;   N5 --> S
+
+# 
+
+# &#x20;   Q --> RR
+
+# &#x20;   F -.-> N1
+
+# &#x20;   F -.-> N2
+
+# &#x20;   F -.-> N3
+
+# &#x20;   F -.-> N4
+
+# &#x20;   F -.-> N5
+
+# ```
+
+# 
+
+# \### Write path
+
+# 
+
+# 1\. A client sends a PUT request to any available node.
+
+# 2\. The receiving node acts as the coordinator.
+
+# 3\. Consistent hashing identifies the three replica owners.
+
+# 4\. The coordinator sends writes to the replicas in parallel.
+
+# 5\. Each replica appends the operation to its write-ahead log and flushes it before acknowledging.
+
+# 6\. The coordinator returns success after receiving at least \*\*W=2 acknowledgements\*\*.
+
+# 
+
+# \### Read path
+
+# 
+
+# 1\. A client sends a GET request to any available node.
+
+# 2\. The coordinator identifies the three replica owners.
+
+# 3\. It requests values from the replicas.
+
+# 4\. After receiving \*\*R=2 responses\*\*, it selects the newest available version using the last-write-wins conflict rule.
+
+# 5\. Stale replicas are repaired through read repair.
+
+# 
+
+# With \*\*R + W > N\*\*, read and write quorums intersect. The practical consistency guarantee also depends on the last-write-wins timestamp and conflict-resolution assumptions.
+
+# 
+
+# \---
+
+# 
+
+# \## Key Features
+
+# 
+
+# \- \*\*Distributed Architecture:\*\* Five independent nodes with HTTP-based communication.
+
+# \- \*\*Consistent Hashing:\*\* 128 virtual nodes per physical node for key distribution.
+
+# \- \*\*Quorum Replication:\*\* Three replicas per key using N=3, W=2, R=2.
+
+# \- \*\*Fault Tolerance:\*\* Continues serving operations when one replica is unavailable.
+
+# \- \*\*Quorum Enforcement:\*\* Returns HTTP 503 when the required quorum cannot be reached.
+
+# \- \*\*Failure Detection:\*\* Heartbeat-based node health monitoring.
+
+# \- \*\*Read Repair:\*\* Repairs stale replica data during read operations.
+
+# \- \*\*Persistent Storage:\*\* Write-ahead logging with fsync and recovery.
+
+# \- \*\*WAL Compaction:\*\* Startup and runtime log compaction.
+
+# \- \*\*Sorted Prefix Scanning:\*\* Efficient prefix queries using a sorted key index.
+
+# \- \*\*Tombstones:\*\* Preserves deletion information to prevent stale replicas from resurrecting deleted keys.
+
+# \- \*\*Containerized Deployment:\*\* Five-node Docker Compose environment.
+
+# \- \*\*Automated Testing:\*\* Unit and end-to-end tests covering storage, replication, and failure scenarios.
+
+# \- \*\*Async Load Testing:\*\* Measures throughput, latency percentiles, and request errors.
+
+# 
+
+# \---
+
+# 
+
+# \## Technology Stack
+
+# 
+
+# | Category | Technologies |
+
+# |---|---|
+
+# | Programming Language | Python |
+
+# | Backend Framework | FastAPI |
+
+# | API Communication | REST, HTTPX |
+
+# | Async Processing | Asyncio |
+
+# | Storage | In-memory dictionary, sorted key index |
+
+# | Persistence | Write-Ahead Log, fsync |
+
+# | Distributed Systems | Consistent Hashing, Quorum Replication |
+
+# | Fault Tolerance | Heartbeats, Read Repair |
+
+# | Containerization | Docker, Docker Compose |
+
+# | Testing | Pytest |
+
+# | Load Testing | HTTPX, Asyncio |
+
+# | CI/CD | GitHub Actions |
+
+# 
+
+# \---
+
+# 
+
+# \## Quick Start
+
+# 
+
+# \### Prerequisites
+
+# 
+
+# \- Python 3.11 or later
+
+# \- Docker Desktop
+
+# \- Docker Compose
+
+# 
+
+# \### Option 1: Docker Compose (Recommended)
+
+# 
+
+# Clone the repository:
+
+# 
+
+# ```bash
+
+# git clone https://github.com/shreyacode11/distributed-kv-store.git
+
+# cd distributed-kv-store
+
+# ```
+
+# 
+
+# Build and start the five-node cluster:
+
+# 
+
+# ```bash
+
+# docker compose up -d --build
+
+# ```
+
+# 
+
+# The nodes are available at:
+
+# 
+
+# | Node | Endpoint |
+
+# |---|---|
+
+# | Node 1 | http://localhost:8001 |
+
+# | Node 2 | http://localhost:8002 |
+
+# | Node 3 | http://localhost:8003 |
+
+# | Node 4 | http://localhost:8004 |
+
+# | Node 5 | http://localhost:8005 |
+
+# 
+
+# Check cluster status:
+
+# 
+
+# ```bash
+
+# curl http://localhost:8001/cluster/status
+
+# ```
+
+# 
+
+# Run the guided demonstration:
+
+# 
+
+# ```bash
+
+# ./scripts/demo.sh
+
+# ```
+
+# 
+
+# Stop the cluster:
+
+# 
+
+# ```bash
+
+# docker compose down
+
+# ```
+
+# 
+
+# To remove persistent Docker volumes as well:
+
+# 
+
+# ```bash
+
+# docker compose down -v
+
+# ```
+
+# 
+
+# \### Option 2: Run Without Docker
+
+# 
+
+# Create a virtual environment:
+
+# 
+
+# ```bash
+
+# python -m venv .venv
+
+# ```
+
+# 
+
+# Activate it on Windows:
+
+# 
+
+# ```powershell
+
+# .venv\\Scripts\\Activate.ps1
+
+# ```
+
+# 
+
+# Install dependencies:
+
+# 
+
+# ```bash
+
+# pip install -r requirements.txt
+
+# ```
+
+# 
+
+# Start the local cluster:
+
+# 
+
+# ```bash
+
+# bash scripts/run\_local.sh
+
+# ```
+
+# 
+
+# Stop the processes:
+
+# 
+
+# ```bash
+
+# bash scripts/stop\_local.sh
+
+# ```
+
+# 
+
+# \---
+
+# 
+
+# \## API Reference
+
+# 
+
+# | Method | Endpoint | Description |
+
+# |---|---|---|
+
+# | PUT | `/kv/{key}` | Write a key-value pair using quorum replication |
+
+# | GET | `/kv/{key}` | Read a value using quorum reads |
+
+# | DELETE | `/kv/{key}` | Delete a key using a tombstone |
+
+# | GET | `/scan?prefix=\&limit=` | Sorted distributed prefix scan |
+
+# | GET | `/cluster/status` | Cluster configuration and peer health |
+
+# | GET | `/cluster/locate/{key}` | Identify the replica owners for a key |
+
+# | GET | `/health` | Node health check |
+
+# 
+
+# \### Example: Write a key
+
+# 
+
+# ```bash
+
+# curl -X PUT http://localhost:8001/kv/user:42 \\
+
+# &#x20; -H "Content-Type: application/json" \\
+
+# &#x20; -d '{"value":"alice"}'
+
+# ```
+
+# 
+
+# \### Example: Read through another node
+
+# 
+
+# ```bash
+
+# curl http://localhost:8004/kv/user:42
+
+# ```
+
+# 
+
+# \### Example: Locate replicas
+
+# 
+
+# ```bash
+
+# curl http://localhost:8001/cluster/locate/user:42
+
+# ```
+
+# 
+
+# \### Example: Prefix scan
+
+# 
+
+# ```bash
+
+# curl "http://localhost:8001/scan?prefix=user:\&limit=10"
+
+# ```
+
+# 
+
+# \### Example: Delete a key
+
+# 
+
+# ```bash
+
+# curl -X DELETE http://localhost:8001/kv/user:42
+
+# ```
+
+# 
+
+# \---
+
+# 
+
+# \## Fault Tolerance and Recovery
+
+# 
+
+# The cluster was tested using Docker Compose by deliberately stopping and restarting replica nodes.
+
+# 
+
+# | Scenario | Observed result |
+
+# |---|---|
+
+# | All five nodes operational | Reads and writes successful |
+
+# | One replica stopped | Read quorum maintained |
+
+# | Write with one replica stopped | Successful with two acknowledgements |
+
+# | Stopped replica restarted | Node recovered and became healthy |
+
+# | Data accessed after recovery | Previously written values remained readable |
+
+# | Two of three replicas stopped | HTTP 503 returned when read quorum was unavailable |
+
+# | All nodes restored | All five peers reported alive |
+
+# 
+
+# These tests demonstrate quorum enforcement, continued operation during a single replica failure, and node recovery.
+
+# 
+
+# \---
+
+# 
+
+# \## Automated Testing
+
+# 
+
+# Run the complete test suite:
+
+# 
+
+# ```bash
+
+# python -m pytest -q
+
+# ```
+
+# 
+
+# \*\*Latest verified result: 21 tests passed.\*\*
+
+# 
+
+# The tests cover storage operations, WAL recovery, compaction, replication, and end-to-end cluster behavior.
+
+# 
+
+# \---
+
+# 
+
+# \## Performance Benchmarks
+
+# 
+
+# Benchmarks were executed locally using Docker Compose. Results depend on hardware, Docker overhead, and system load.
+
+# 
+
+# \### Comparable benchmark: 5 nodes vs. 4 nodes
+
+# 
+
+# Both runs used:
+
+# \- 8 concurrent workers
+
+# \- 100-key keyspace
+
+# \- 30% write ratio
+
+# \- 15-second target duration
+
+# 
+
+# | Metric | 5 Nodes | 4 Nodes (1 Down) |
+
+# |---|---:|---:|
+
+# | Requests | 504 | 451 |
+
+# | Successful | 504 | 450 |
+
+# | Errors | 0 | 1 |
+
+# | Throughput | 33 ops/s | 30 ops/s |
+
+# | p50 latency | 206.9 ms | 201.6 ms |
+
+# | p95 latency | 469.7 ms | 679.7 ms |
+
+# | p99 latency | 665.6 ms | 1021.2 ms |
+
+# | Success rate | 100% | 99.78% |
+
+# 
+
+# \### Higher-concurrency baseline
+
+# 
+
+# An additional five-node run used 32 concurrent workers and a 2,000-key keyspace.
+
+# 
+
+# | Metric | Result |
+
+# |---|---:|
+
+# | Requests | 512 |
+
+# | Successful | 512 |
+
+# | Errors | 0 |
+
+# | Throughput | 31 ops/s |
+
+# | p50 latency | 769.8 ms |
+
+# | p95 latency | 2286.7 ms |
+
+# | p99 latency | 3080.7 ms |
+
+# 
+
+# These are individual local runs, not averaged benchmark results. The configurations differ, so the higher-concurrency run should not be directly compared with the 8-worker measurements.
+
+# 
+
+# Run your own benchmark:
+
+# 
+
+# ```bash
+
+# python loadtest/loadtest.py \\
+
+# &#x20; --nodes http://localhost:8001,http://localhost:8002,http://localhost:8003,http://localhost:8004,http://localhost:8005 \\
+
+# &#x20; --duration 15 \\
+
+# &#x20; --concurrency 32 \\
+
+# &#x20; --write-ratio 0.3
+
+# ```
+
+# 
+
+# \---
+
+# 
+
+# \## Design Decisions and Trade-offs
+
+# 
+
+# | Decision | Benefit | Trade-off |
+
+# |---|---|---|
+
+# | Consistent hashing with 128 virtual nodes | Distributes keys across nodes | Static membership; no dynamic rebalancing |
+
+# | N=3, W=2, R=2 | Quorum intersection and tolerance of one unavailable replica | Operations fail when quorum is unavailable |
+
+# | Five physical nodes | Demonstrates real partitioning and replication | More resources required |
+
+# | Leaderless coordination | Any node can coordinate a request | Requires deterministic conflict resolution |
+
+# | Last-write-wins | Simple and deterministic conflict handling | Depends on timestamps and can lose concurrent updates |
+
+# | Tombstones | Prevents deleted data from being resurrected | Tombstones are not garbage-collected |
+
+# | WAL with fsync | Durable acknowledgements and recovery | Additional write latency |
+
+# | Sorted key index | Efficient prefix scans | Distributed scans contact multiple nodes |
+
+# | Read repair | Repairs stale replicas during reads | Does not repair keys that are never read |
+
+# 
+
+# \---
+
+# 
+
+# \## Known Limitations and Future Improvements
+
+# 
+
+# \- \*\*Dynamic Membership:\*\* Add node discovery, membership changes, and data rebalancing.
+
+# \- \*\*Anti-Entropy:\*\* Introduce Merkle-tree synchronization for background replica reconciliation.
+
+# \- \*\*Hinted Handoff:\*\* Queue writes for temporarily unavailable replicas.
+
+# \- \*\*Conflict Resolution:\*\* Evaluate vector clocks or hybrid logical clocks instead of wall-clock-based LWW.
+
+# \- \*\*Tombstone Garbage Collection:\*\* Add safe tombstone cleanup after replica synchronization.
+
+# \- \*\*Security:\*\* Introduce authentication and TLS for external and internal communication.
+
+# \- \*\*Observability:\*\* Add structured logging, metrics, and distributed tracing.
+
+# \- \*\*Performance:\*\* Profile network overhead, disk I/O, and concurrent request handling.
+
+# 
+
+# \---
+
+# 
+
+# \## Project Structure
+
+# 
+
+# ```text
+
+# distributed-kv-store/
+
+# │
+
+# ├── .github/
+
+# │   └── workflows/       GitHub Actions CI
+
+# │
+
+# ├── kvnode/
+
+# │   ├── ring.py          Consistent hashing and virtual nodes
+
+# │   ├── storage.py       WAL, recovery, compaction, sorted index
+
+# │   └── main.py          FastAPI, quorum coordination, read repair
+
+# │
+
+# ├── tests/               Unit and end-to-end tests
+
+# ├── loadtest/            Async throughput and latency benchmark
+
+# ├── scripts/             Local cluster and demo scripts
+
+# │
+
+# ├── Dockerfile
+
+# ├── docker-compose.yml
+
+# ├── requirements.txt
+
+# ├── pytest.ini
+
+# ├── Makefile
+
+# └── README.md
+
+# ```
+
+# 
+
+# \---
+
+# 
+
+# \## Configuration
+
+# 
+
+# The cluster uses environment variables for node configuration:
+
+# 
+
+# | Variable | Description |
+
+# |---|---|
+
+# | `NODE\_ID` | Current node identifier |
+
+# | `PEERS` | Node IDs and their URLs |
+
+# | `N` | Replica count |
+
+# | `W` | Write quorum |
+
+# | `R` | Read quorum |
+
+# | `DATA\_DIR` | Persistent storage directory |
+
+# | `FSYNC` | Enable or disable WAL fsync |
+
+# | `RPC\_TIMEOUT` | Internal request timeout |
+
+# | `HEARTBEAT\_INTERVAL` | Peer health-check interval |
+
+# 
+
+# \---
+
+# 
+
+# \## Author
+
+# 
+
+# \*\*Shreya B. Saboji\*\*
+
+# 
+
+# Software Engineering | Backend Development | Distributed Systems
+
+# 
+
+# \[GitHub](https://github.com/shreyacode11)
+
+# 
+
+# \---
+
+# 
+
+# \*An engineering project exploring distributed storage, replication, consistency, fault tolerance, and recovery.\*
 
